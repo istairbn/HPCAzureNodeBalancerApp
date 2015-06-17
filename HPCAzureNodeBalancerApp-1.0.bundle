@@ -1,0 +1,15 @@
+<Bundle name="HPCAzureNodeBalancerApp" version="1.0" system="false">
+  <status>UNINSTALLED</status>
+  <owner>ben.newton@rabobank.com</owner>
+  <services>
+	<Service>
+    <name>Azure-GrowShrinkOnDemand</name>
+		<resourceSelection>agentId contains EURV192D03</resourceSelection>
+    <fork>false</fork>
+    <background>true</background>
+		<instanceCount>-1</instanceCount>
+		<pauseSeconds>0</pauseSeconds>
+		<script>powerShellRunner.groovy "Azure-GrowShrinkOnDemand.ps1"</script>
+    </Service>
+	</services>
+</Bundle>
