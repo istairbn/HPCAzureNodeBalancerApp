@@ -43,6 +43,9 @@
    .Parameter Logging
     Whether the script creates a Log file or not - location determined by the LogFilePrefix. Default is True
 
+   .Parameter TimeLimit
+    How many minutes should the script run for before turning off. If 0, the script runs indefinitely. Default is 0.
+
    .Parameter LogFilePrefix
     Specifies the prefix name of the log file, you can include the path, by default the log will be in current working directory
 
@@ -119,6 +122,11 @@ $Logging=$true,
 $LogFilePrefix="Azure-GrowShrinkOnDemand",
 
 [Parameter (Mandatory=$False)]
+[ValidateRange(0,[Int]::MaxValue)]
+[Int] 
+$TimeLimit=0,
+
+[Parameter (Mandatory=$False)]
 [ValidateRange(1,[Int]::MaxValue)]
 [int]
 $ShrinkCheckIdleTimes=3
@@ -139,8 +147,8 @@ Function LogInfo
     $message
     )
 
-    $LogDate=Get-Date -Format 'yyyy/MM/dd HH:mm:ss' 
-    $message="$LogDate [Info] $message"
+    $LogDate=Get-Date -Format 'yyyy/MM/dd HH:mm:ss'
+    $message = "$LogDate[Info] $message"
 
     if($Logging -eq $true)
     {
@@ -200,26 +208,45 @@ Function LogError
 
 $ShrinkCheck = 0
 $loopcount = 0
-LogInfo "Action:START Component:GrowCheck Status:Online Msg:`"Starting Azure Auto-Scaling`""
+LogInfo "Component:Autoscaler Status:Online Action:START Msg:`"Starting Azure Auto-Scaling`""
 
+#Add Powershell Snap In
+Try
+{
 Add-PSSnapIn Microsoft.HPC;
+}
+Catch
+{
+[system.exception]
+LogError $error
+Exit 1  
+}
 
-while(1)
+$timeout = new-timespan -Minutes $TimeLimit
+$sw = [diagnostics.stopwatch]::StartNew()
+
+if($TimeLimit -gt 0)
+{
+    $conditions = ($sw.elapsed -lt $timeout)
+}
+else
+{
+    $conditions = 1
+}
+
+while($conditions)
 {
 
 #Set initial variables for the loop 
 
-$activeJobs = @()
 $GROW = $false
 $SHRINK = $false
-$Duration = 0
-$TotalCalls = 0
-$OutstandingCalls = 0
-$RunningCalls = 0
-$CompletedCalls = 0
-$AllocatedCores = 0
 
 #Find running Jobs        
+Try
+{
+LogInfo "Action:START Component:GrowCheck Status:Online Msg:`"Starting Azure Auto-Scaling`""
+$activeJobs = @()
 if ($JobTemplates.Count -ne 0)
         {
             foreach ($jobTemplate in $JobTemplates)
@@ -232,10 +259,24 @@ if ($JobTemplates.Count -ne 0)
         {
             $activeJobs = @(Get-HpcJob -State Running,Queued -ErrorAction SilentlyContinue -Verbose) 
         }
-
-
+}
+Catch
+{
+[System.Exception]
+LogError $error
+}
 
 #Calculate current Grid Workload
+Try
+{
+#Initialise Required Variables for calculation
+$Duration = 0
+$TotalCalls = 0
+$OutstandingCalls = 0
+$RunningCalls = 0
+$CompletedCalls = 0
+$AllocatedCores = 0
+
 foreach($job in $activeJobs)
     {
     $Duration += $job.CallDuration
@@ -260,11 +301,18 @@ else
 $GridRemainingMins = [math]::Round(($GridRemainingSecs / 60),2)
 $CompletedCalls = ($TotalCalls - $OutstandingCalls)
 
-
 LogInfo "Component:GrowCheck Action:REPORTING Status:Online Duration:$Duration AvgSecs:$AvgSecs TotalCalls:$TotalCalls OutstandingCalls:$OutstandingCalls CompletedCalls:$CompletedCalls RunningCalls:$RunningCalls AllocatedCores:$AllocatedCores GridRemainingMins:$GridRemainingMins GridRemainingSecs:$GridRemainingSecs"
+}
+Catch
+{
+[System.Exception]
+LogError $error
+}
+
 
 #Check values against thresholds
-
+Try
+{
 if($CallQueueThreshold -ne 0){
     
     LogInfo "Component:GrowCheck Status:Online CallQueueThreshold:$CallQueueThreshold CallQueue:$OutstandingCalls"
@@ -299,9 +347,22 @@ if($NumOfQueuedJobsToGrowThreshold -ne 0){
     }
 
     LogInfo "Component:GrowCheck Status:Online Action:COMPLETE GrowState:$GROW"
+}
+
+Catch
+{
+[System.Exception]
+LogError $error
+}
+
+
+#If Grow is True, start Growth Process
 
 if($GROW -eq $TRUE)
     {
+        #Growth Process
+        Try
+        {
         LogInfo "Component:NodeGrowth Status:Online Action:STARTING"
         $ShrinkCheck = 0
         $azureNodes = @();
@@ -381,17 +442,26 @@ if($GROW -eq $TRUE)
             LogInfo "Component:NodeGrowth Status:Online Action:NOTHING Msg`"Grid at full capacity`""
             }
 
-        LogInfo "Component:NodeGrowth Status:Online Action:COMPLETE Msg`"Node Growth Loop Complete`""
-    }
-
+        LogInfo "Component:NodeGrowth Status:Online Action:COMPLETE Msg`"Node Growth Complete`""
+        }
+        Catch
+        {
+        [System.Exception]
+        LogError $error
+        }
 else
     {
     LogInfo "Component:NodeGrowth Status:Online Action:NOTHING Msg:`"Growth not yet required`""
     }
+}
+
 
 #If no need to Grow, check if the Grid needs to shrink
 
 if($GROW -eq $False)
+    {
+    #Shrink Check
+    Try
     {
     LogInfo "Component:ShrinkCheck Status:Online Action:STARTING"
     $NodesAvailable = @();
@@ -437,32 +507,51 @@ if($GROW -eq $False)
         $SHRINK = $true
         }
         LogInfo "Component:ShrinkCheck Status:Online Action:COMPLETE ShrinkState:$SHRINK"
+        }
+    Catch
+    {
+    [System.Exception]
+    LogError $error
+    }
     }
 
 if($SHRINK -eq $true)
+    #Shrink Process
     {
-        LogInfo "Component:NodeShrink Status:Online Action:STARTING NodeCount:$($idleNodes.Count) Nodes:`"$NodesList`""
-        LogInfo "Component:NodeShrink Status:Online Action:OFFLINE Msg:`"Bringing nodes offline`""
-        Set-HpcNodeState -Node $idleNodes -State offline -WarningAction Ignore -ErrorAction SilentlyContinue -Verbose *>> $(GetLogFileName) 
+        Try
+        {
+            LogInfo "Component:NodeShrink Status:Online Action:STARTING NodeCount:$($idleNodes.Count) Nodes:`"$NodesList`""
+            LogInfo "Component:NodeShrink Status:Online Action:OFFLINE Msg:`"Bringing nodes offline`""
+            Set-HpcNodeState -Node $idleNodes -State offline -WarningAction Ignore -ErrorAction SilentlyContinue -Verbose *>> $(GetLogFileName) 
         
-        $error.Clear();
-        LogInfo "Component:NodeShrink Status:Online Action:NOTDEPLOYED Msg:`"Setting Nodes to Not Deployed`""
-        Stop-HpcAzureNode -Node $idleNodes -Force $false -Async $false -ErrorAction SilentlyContinue *>> $(GetLogFileName) 
-            if (-not $?)
-            {
+            $error.Clear();
+            LogInfo "Component:NodeShrink Status:Online Action:NOTDEPLOYED Msg:`"Setting Nodes to Not Deployed`""
+            Stop-HpcAzureNode -Node $idleNodes -Force $false -Async $false -ErrorAction SilentlyContinue *>> $(GetLogFileName) 
+                if (-not $?)
+                            {
                 LogError "Stop Azure nodes failed."
                 LogError $error
             }
-            else
-            {
+                else
+                        {
                 LogInfo "Component:NodeShrink Status:Online Action:COMPLETE Msg:`"Nodes offline`""
             }
-        $ShrinkCheck = 0
+            $ShrinkCheck = 0
+        }
+        Catch
+        {
+        [System.Exception]
+        LogError $error
+        }
     }
     else
     {
         LogInfo "Component:NodeShrink Status:Online Action:NOTHING Msg:`"Shrink not yet required`""
     }
+    $elapsed = $sw.elapsed
+    LogInfo "Component:AutoScaler Elapsed:$elapsed TimeLimit:$TimeLimit"
 
 sleep $Wait
 }
+
+LogInfo "Component:AutoScaler Status:Offline Action:COMPLETE Msg:`"Stopping Azure Auto-Scaling`""
