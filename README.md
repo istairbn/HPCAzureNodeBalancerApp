@@ -5,7 +5,6 @@ A Logscape App that automatically grows and shrinks Azure nodes for HPC Server 2
 # HPCAzureNodeBalancerApp-1.0
 # Owner: Ben Newton
 # Created Date: 17/06/2015
-# Contact: Ben.Newton@excelian.com
 ###############################################################################
 
 This App is designed to work within Logscape - although underlying script will run without it. 
